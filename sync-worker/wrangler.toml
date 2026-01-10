@@ -1,0 +1,19 @@
+name = "teamtailor-webflow-sync"
+account_id = "206ec8cfa74a761ed90035a8c847bd68"
+main = "src/index.js"
+compatibility_date = "2024-04-03"
+
+# Observability (Persistent Logs)
+[observability]
+enabled = true
+
+# Cron Trigger: Run every night at 3 AM UTC
+[triggers]
+crons = ["0 3 * * *"]
+
+[vars]
+WEBFLOW_COLLECTION_ID = "69610f73310b2acff1ca1d03"
+
+# Secrets (Set these via `wrangler secret put <KEY>`)
+# TEAMTAILOR_API_KEY
+# WEBFLOW_API_TOKEN
