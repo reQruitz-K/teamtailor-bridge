@@ -5,8 +5,8 @@
  * SETUP IN WEBFLOW:
  * 1. Add "ID" = "phone" to your Phone input field.
  * 2. Add these scripts/styles to <head> or before </body>:
- *    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/intl-tel-input@18.2.1/build/css/intlTelInput.css">
- *    <script src="https://cdn.jsdelivr.net/npm/intl-tel-input@18.2.1/build/js/intlTelInput.min.js"></script>
+ *    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/intl-tel-input@23.0.1/build/css/intlTelInput.css">
+ *    <script src="https://cdn.jsdelivr.net/npm/intl-tel-input@23.0.1/build/js/intlTelInput.min.js"></script>
  */
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -20,7 +20,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // 1. Initialize intl-tel-input
     // @ts-ignore
     const iti = window.intlTelInput(input, {
-        utilsScript: "https://cdn.jsdelivr.net/npm/intl-tel-input@18.2.1/build/js/utils.js",
+        utilsScript: "https://cdn.jsdelivr.net/npm/intl-tel-input@23.0.1/build/js/utils.js",
         separateDialCode: true, // Shows flag + dial code separately
         initialCountry: "auto",
         geoIpLookup: function(callback) {
@@ -29,7 +29,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(function(data) { callback(data.country_code); })
                 .catch(function() { callback("us"); });
         },
-        preferredCountries: ["pl", "us", "gb", "de"], // Poland first as per screen
+        preferredCountries: [], // No favorites, just alphabetical
     });
 
     // 2. Ensuring the FULL number is submitted
