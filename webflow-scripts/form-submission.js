@@ -27,6 +27,18 @@ document.addEventListener('DOMContentLoaded', function() {
     form.setAttribute('data-tt-bound', 'true');
     // Helper: Clone FormData (for logging/debugging if needed)
     // const debugData = (fd) => { for(var pair of fd.entries()) { console.log(pair[0]+ ', '+ pair[1]); } };
+    // 1. Check Job Active Status (New Logic)
+    // We expect a hidden element with id="job-active-status" containing "true" or "false"
+    // Or data-job-active attribute somewhere.
+    const activeStatusEl = document.getElementById('job-active-status');
+    const isActive = activeStatusEl ? activeStatusEl.textContent.trim().toLowerCase() !== 'false' : true;
+
+    if (!isActive) {
+        console.log("Job is inactive. Removing application form.");
+        if (form) form.remove(); // OR $(form).remove();
+        return;
+    }
+
     // 2. Attach Listener
     // We use jQuery here because Webflow's own scripts heavily rely on jQuery events.
     // Hooking into submit with jQuery ensures we play nice with Webflow's validation.
