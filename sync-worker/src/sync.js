@@ -1,7 +1,23 @@
 import { WebflowClient } from './webflow.js';
 import { TeamTailorClient } from './teamtailor.js';
 
-export async function syncJob(jobId, env, jobData = null, resolvedLocationName = null, existingItem = null, resolvedQuestionsJson = null) {
+function slugify(str) {
+    return String(str)
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+}
+
+const PRIMARY_LOCALE_ID = '662123573a11a37d76a9f412';
+const SECONDARY_LOCALES = [
+    { tag: 'fi', id: '665cb20748cb746631bffd66' },
+    { tag: 'sv', id: '69b282e8dac0c1bbda31232c' }
+];
+const ALL_LOCALE_IDS = [PRIMARY_LOCALE_ID, ...SECONDARY_LOCALES.map(l => l.id)];
+
+export async function syncJob(jobId, env, jobData = null, resolvedLocationName = null, existingItem = null, resolvedQuestionsJson = null, skipPublish = false) {
     console.log(`[Sync] Starting sync for Job ID: ${jobId}`);
 
     // If inputs not provided (e.g. from Webhook), instantiate clients and fetch
@@ -32,7 +48,16 @@ export async function syncJob(jobId, env, jobData = null, resolvedLocationName =
             console.error(`[Sync] Job ${jobId} not found in TeamTailor.`);
             return;
         }
-        
+
+        // Guard: only archive jobs that are truly closed/inactive (not hidden/internal which are still open)
+        const humanStatus = job.attributes['human-status'];
+        const TERMINAL_STATUSES = new Set(['closed', 'draft', 'archived', 'template']);
+        if (humanStatus && TERMINAL_STATUSES.has(humanStatus)) {
+            console.log(`[Sync] Job ${jobId} is terminal (human-status=${humanStatus}). Archiving from Webflow...`);
+            await deleteJob(jobId, env);
+            return;
+        }
+
         // REFACTOR: We need location resolution.
         // If jobData is passed, we assume the caller handled location resolution OR provided 'included' context.
         // Let's change signature to syncJob(jobId, env, jobObject, resolvedLocationName, preFetchedExistingItem)
@@ -153,46 +178,81 @@ export async function syncJob(jobId, env, jobData = null, resolvedLocationName =
             };
         }
 
-        // 4. Upsert
+        // 4. Upsert — Primary locale
         let itemToUpdate = existingItem;
         if (!itemToUpdate) {
-             itemToUpdate = await wfClient.findJobByTeamTailorId(job.id);
+            itemToUpdate = await wfClient.findJobByTeamTailorId(job.id);
         }
 
         if (itemToUpdate) {
-            // Efficiency Check: Compare 'updated-at' AND 'internal' status AND 'questions-json'
             const existingTimestamp = itemToUpdate.fieldData['updated-at'];
             const newTimestamp = fieldData['updated-at'];
-            
             const existingInternal = !!itemToUpdate.fieldData['internal'];
             const newInternal = !!fieldData['internal'];
-            
-            // Compare questions-json (handle null/undefined)
             const existingQuestions = itemToUpdate.fieldData['questions-json'] || "";
-            // questionsJson is already a string (or empty string) from above
             const newQuestions = fieldData['questions-json'] || "";
-            
             const existingLocations = itemToUpdate.fieldData['locations'] || "";
             const newLocations = fieldData['locations'] || "";
 
-            if (existingTimestamp === newTimestamp && 
-                existingInternal === newInternal && 
+            const primaryUpToDate = existingTimestamp === newTimestamp &&
+                existingInternal === newInternal &&
                 existingQuestions === newQuestions &&
-                existingLocations === newLocations) {
-                console.log(`[Sync] Skipping Item ${itemToUpdate.id} (Up to date: ${newTimestamp}, Data Matches)`);
-                return; // SKIP UPDATE & PUBLISH
-            }
+                existingLocations === newLocations &&
+                !itemToUpdate.isArchived &&
+                itemToUpdate.isDraft === false;
 
-            console.log(`[Sync] Updating Webflow Item ${itemToUpdate.id}...`);
-            await wfClient.updateItem(itemToUpdate.id, fieldData);
-            console.log(`[Sync] Publishing Webflow Item ${itemToUpdate.id}...`);
-            await wfClient.publishItem(itemToUpdate.id);
+            if (primaryUpToDate) {
+                console.log(`[Sync] Primary up to date for Item ${itemToUpdate.id}, syncing secondary locales...`);
+            } else {
+                console.log(`[Sync] Updating Webflow Item ${itemToUpdate.id}...`);
+                await wfClient.updateItem(itemToUpdate.id, fieldData);
+            }
         } else {
             console.log(`[Sync] Creating new Webflow Item...`);
-            const newItem = await wfClient.createItem(fieldData);
-            console.log(`[Sync] Publishing Webflow Item ${newItem.id}...`);
-            await wfClient.publishItem(newItem.id);
+            try {
+                itemToUpdate = await wfClient.createItem(fieldData);
+            } catch (createErr) {
+                // Ghost slug from a previously deleted Webflow item.
+                // First fallback: title-slug + job-id (was used in older sessions, may also be haunted).
+                // Second fallback: job-{id} — deterministically unique and never used as a slug before.
+                if (createErr.message && createErr.message.includes('Unique value is already in database')) {
+                    const fallbackSlug = `${slugify(job.attributes.title)}-${job.id}`;
+                    console.log(`[Sync] Slug collision for Job ${jobId}, retrying with slug: ${fallbackSlug}`);
+                    try {
+                        itemToUpdate = await wfClient.createItem({ ...fieldData, slug: fallbackSlug });
+                    } catch (fallbackErr) {
+                        if (fallbackErr.message && fallbackErr.message.includes('Unique value is already in database')) {
+                            const safeSlug = `job-${job.id}`;
+                            console.log(`[Sync] Fallback slug also taken, using safe slug: ${safeSlug}`);
+                            itemToUpdate = await wfClient.createItem({ ...fieldData, slug: safeSlug });
+                        } else {
+                            throw fallbackErr;
+                        }
+                    }
+                } else {
+                    throw createErr;
+                }
+            }
         }
+
+        // 5. Stage secondary locales, then publish once — so all three locale versions
+        //    go live in a single publish call. (Reconcile skips publish here; does batch publish.)
+        if (!skipPublish) {
+            await Promise.all(SECONDARY_LOCALES.map(async ({ tag, id }) => {
+                try {
+                    await wfClient.updateItemForLocale(itemToUpdate.id, id, fieldData);
+                    console.log(`[Sync] ${tag} locale staged for Item ${itemToUpdate.id}`);
+                } catch (err) {
+                    console.error(`[Sync] Failed ${tag} locale for Item ${itemToUpdate.id}:`, err.message);
+                }
+            }));
+
+            console.log(`[Sync] Publishing Item ${itemToUpdate.id} (all locales)...`);
+            await wfClient.publishItem([itemToUpdate.id]);
+        }
+
+        // Return itemId + fieldData so reconcile can do locale updates after batch publish
+        return { itemId: itemToUpdate.id, fieldData };
 
     } catch (error) {
         console.error(`[Sync] Failed to sync Job ${jobId}:`, error);

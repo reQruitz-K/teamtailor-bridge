@@ -3,6 +3,8 @@ import { TeamTailorClient } from './teamtailor.js';
 import { WebflowClient } from './webflow.js';
 import { sleep, verifySignature } from './utils.js';
 
+const SECONDARY_LOCALE_IDS = ['665cb20748cb746631bffd66', '69b282e8dac0c1bbda31232c'];
+
 // Helper for batch reconciliation
 async function reconcileAllJobs(env) {
     const ttClient = new TeamTailorClient(env.TEAMTAILOR_API_KEY);
@@ -25,74 +27,85 @@ async function reconcileAllJobs(env) {
         }
     }
 
-    // Loop and Sync
+    // Pass 1: Create/update primary locale for all jobs — skip publish and locale updates
+    const syncedItems = []; // [{itemId, fieldData}]
     for (const job of jobs) {
         try {
-            // Resolve Location from 'included'
-            // Resolve Location from 'included'
             let locationName = "";
             if (job.relationships.locations && job.relationships.locations.data && job.relationships.locations.data.length > 0) {
-                // Map ALL locations
                 const locationIds = job.relationships.locations.data.map(l => l.id);
                 const locationNames = locationIds.map(id => {
                     const locObj = TeamTailorClient.getIncludedResource(allJobsResponse, 'locations', id);
                     return locObj ? locObj.attributes.name : null;
-                }).filter(Boolean); // Remove nulls
-                
+                }).filter(Boolean);
                 if (locationNames.length > 0) {
                     locationName = locationNames.join(", ");
                 }
             }
 
-            // Resolve Questions from 'included'
             let questionsJson = "";
-            // Resolve Questions from 'included' via Picked Questions (Mandatory/Optional)
             if (allJobsResponse.included && job.relationships['picked-questions'] && job.relationships['picked-questions'].data) {
-                // Use Forward Link: Job -> PickedQuestions
                 const pickedQIds = new Set(job.relationships['picked-questions'].data.map(pq => pq.id));
-                
-                // Find these picked-questions in the included array
-                const myPickedQuestions = allJobsResponse.included.filter(item => 
+                const myPickedQuestions = allJobsResponse.included.filter(item =>
                     item.type === 'picked-questions' && pickedQIds.has(item.id)
                 );
-                
                 const questionDefs = allJobsResponse.included.filter(item => item.type === 'questions');
-
                 const resolvedQs = myPickedQuestions.map(pq => {
                     const qId = pq.relationships.question?.data?.id;
                     const qDef = questionDefs.find(q => q.id === qId);
                     if (!qDef) return null;
-
                     return {
                         id: qDef.id,
                         label: qDef.attributes.label || qDef.attributes.title,
                         type: qDef.attributes['question-type'] || qDef.attributes['visual-type'] || qDef.attributes.type,
-                        required: pq.attributes.mandatory, // Source of Truth
+                        required: pq.attributes.mandatory,
                         options: qDef.attributes.options || qDef.attributes.alternatives || [],
                         description: qDef.attributes.description,
                         config: {
-                             min: qDef.attributes['start-with'] || qDef.attributes['min-value'],
-                             max: qDef.attributes['end-with'] || qDef.attributes['max-value'],
-                             unit: qDef.attributes.unit
+                            min: qDef.attributes['start-with'] || qDef.attributes['min-value'],
+                            max: qDef.attributes['end-with'] || qDef.attributes['max-value'],
+                            unit: qDef.attributes.unit
                         }
                     };
                 }).filter(Boolean);
-
                 if (resolvedQs.length > 0) {
                     questionsJson = JSON.stringify(resolvedQs);
                 }
             }
 
             const existingItem = wfMap.get(String(job.id));
-            
-            // Call syncJob with injected data. 
-            await syncJob(job.id, env, job, locationName, existingItem, questionsJson);
+            const result = await syncJob(job.id, env, job, locationName, existingItem, questionsJson, true /* skipPublish */);
+            if (result?.itemId) syncedItems.push(result);
 
-            // Rate Limit Politeness
             await sleep(250);
 
         } catch (e) {
             console.error(`[Reconcile] Failed sync for ${job.id}`, e);
+        }
+    }
+
+    // Pass 2: Stage secondary locale content for all items (before batch publish)
+    console.log(`[Reconcile] Staging secondary locales for ${syncedItems.length} items...`);
+    for (const { itemId, fieldData } of syncedItems) {
+        await Promise.all(SECONDARY_LOCALE_IDS.map(async (localeId) => {
+            try {
+                await wfClient.updateItemForLocale(itemId, localeId, fieldData);
+            } catch (err) {
+                console.error(`[Reconcile] Failed locale ${localeId} for Item ${itemId}:`, err.message);
+            }
+        }));
+        await sleep(100);
+    }
+    console.log(`[Reconcile] Secondary locale staging complete.`);
+
+    // Pass 3: Batch publish all items — publishes all staged changes (primary + secondary locales)
+    if (syncedItems.length > 0) {
+        console.log(`[Reconcile] Batch publishing ${syncedItems.length} items...`);
+        try {
+            await wfClient.publishItem(syncedItems.map(i => i.itemId));
+            console.log(`[Reconcile] Batch publish complete.`);
+        } catch (err) {
+            console.error(`[Reconcile] Batch publish failed:`, err.message);
         }
     }
 
@@ -422,17 +435,45 @@ export default {
             }
         }
 
+        // Hard-delete all Webflow CMS items so reconcile can recreate them with all locales
+        if (request.method === 'GET' && url.pathname === '/reset') {
+            const key = url.searchParams.get('key');
+            if (key !== env.TEAMTAILOR_API_KEY) {
+                return new Response("Unauthorized", { status: 401 });
+            }
+
+            console.log("[Reset] Fetching all Webflow items to delete...");
+            const wfClient = new WebflowClient(env.WEBFLOW_API_TOKEN, env.WEBFLOW_COLLECTION_ID);
+            const items = await wfClient.getAllItems();
+            console.log(`[Reset] Deleting ${items.length} items...`);
+
+            let deleted = 0;
+            for (const item of items) {
+                try {
+                    await wfClient.deleteItem(item.id);
+                    deleted++;
+                } catch (err) {
+                    console.error(`[Reset] Failed to delete item ${item.id}:`, err.message);
+                }
+                await sleep(150);
+            }
+
+            const msg = `Reset complete. Deleted ${deleted}/${items.length} items. Now run /reconcile.`;
+            console.log(`[Reset] ${msg}`);
+            return new Response(msg, { status: 200 });
+        }
+
         // Manual Reconciliation Trigger (Protected)
         if (request.method === 'GET' && url.pathname === '/reconcile') {
             const key = url.searchParams.get('key');
-            if (key !== env.TEAMTAILOR_API_KEY) { 
+            if (key !== env.TEAMTAILOR_API_KEY) {
                 return new Response("Unauthorized", { status: 401 });
             }
 
             console.log("[Manual] Triggering full reconciliation via HTTP...");
-            ctx.waitUntil(reconcileAllJobs(env));
+            await reconcileAllJobs(env);
 
-            return new Response("Full Reconciliation Triggered (Check Logs)", { status: 202 });
+            return new Response("Full Reconciliation Complete", { status: 200 });
         }
 
         return new Response("TeamTailor-Webflow Sync Worker", { status: 200 });

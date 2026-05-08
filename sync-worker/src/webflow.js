@@ -40,13 +40,21 @@ export class WebflowClient {
     }
 
     async createItem(fieldData) {
-        const url = `${this.baseUrl}/collections/${this.collectionId}/items`;
+        // Use bulk endpoint so all three locale versions are created in one shot.
+        // Items created via the single POST /items endpoint only get a primary-locale
+        // record; secondary locale PATCH calls then 404 because those rows never exist.
+        const url = `${this.baseUrl}/collections/${this.collectionId}/items/bulk`;
         const headers = await this.getHeaders();
-        
+
         const payload = {
             isArchived: false,
             isDraft: false,
-            fieldData: fieldData
+            fieldData,
+            cmsLocaleIds: [
+                '662123573a11a37d76a9f412', // EN (primary)
+                '665cb20748cb746631bffd66', // FI
+                '69b282e8dac0c1bbda31232c'  // SV
+            ]
         };
 
         const response = await fetch(url, {
@@ -60,7 +68,19 @@ export class WebflowClient {
             throw new Error(`Webflow Create Error: ${response.status} - ${errorText}`);
         }
 
-        return await response.json();
+        const data = await response.json();
+        // Bulk response: { items: [...] } — return the single item we created
+        return data.items ? data.items[0] : data;
+    }
+
+    async deleteItem(itemId) {
+        const url = `${this.baseUrl}/collections/${this.collectionId}/items/${itemId}`;
+        const headers = await this.getHeaders();
+        const response = await fetch(url, { method: 'DELETE', headers });
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Webflow Delete Error: ${response.status} - ${errorText}`);
+        }
     }
 
     async updateItem(itemId, fieldData, isArchived = false) {
@@ -68,12 +88,9 @@ export class WebflowClient {
         const headers = await this.getHeaders();
 
         const payload = {
+            isArchived: !!isArchived,
             fieldData: fieldData
         };
-
-        if (isArchived) {
-            payload.isArchived = true;
-        }
 
         const response = await fetch(url, {
             method: 'PATCH',
@@ -89,30 +106,41 @@ export class WebflowClient {
         return await response.json();
     }
 
-    async publishItem(itemId) {
-        // Publish specific item to make it live
+    async updateItemForLocale(itemId, cmsLocaleId, fieldData) {
+        // Individual item PATCH with cmsLocaleId in the body (not as a query param).
+        // Per Webflow docs: "Items only update in the primary locale unless cmsLocaleId is in the body."
+        const url = `${this.baseUrl}/collections/${this.collectionId}/items/${itemId}`;
+        const headers = await this.getHeaders();
+        const response = await fetch(url, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({ cmsLocaleId, fieldData })
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Webflow Locale Update Error [${cmsLocaleId}]: ${response.status} - ${errorText}`);
+        }
+        return await response.json();
+    }
+
+    async publishItem(itemIds) {
         const url = `${this.baseUrl}/collections/${this.collectionId}/items/publish`;
         const headers = await this.getHeaders();
-        
-        const payload = {
-            itemIds: [itemId]
-        };
+        const ids = Array.isArray(itemIds) ? itemIds : [itemIds];
 
         const response = await fetch(url, {
             method: 'POST',
             headers,
-            body: JSON.stringify(payload)
+            body: JSON.stringify({ itemIds: ids })
         });
 
         if (!response.ok) {
             const errorText = await response.text();
-            console.error(`Webflow Publish Error for ${itemId}: ${response.status} - ${errorText}`);
-            // Don't throw here to avoid failing the whole sync just for publish, 
-            // but logging is important.
-            // Actually, if publish fails, it's worth knowing.
             throw new Error(`Webflow Publish Error: ${response.status} - ${errorText}`);
         }
 
-        return await response.json();
+        const result = await response.json();
+        console.log(`[Webflow] Publish response:`, JSON.stringify(result));
+        return result;
     }
 }

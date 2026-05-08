@@ -67,7 +67,7 @@ export class TeamTailorClient {
             return { data: allData, included: includedMap };
         };
 
-        // 1. Standard Published Jobs
+        // 1. All published jobs — includes public, hidden, and unlisted (1:1 with ATS dashboard)
         const publishedUrl = `${this.baseUrl}/jobs?filter[status]=published`;
         
         // 2. Internal Feed Jobs (The secret "internal" jobs)
