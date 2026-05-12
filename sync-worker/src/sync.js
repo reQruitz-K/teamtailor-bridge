@@ -168,7 +168,8 @@ export async function syncJob(jobId, env, jobData = null, resolvedLocationName =
             "internal-name": job.attributes['internal-name'] || "",
             "updated-at": job.attributes['updated-at'] || "",
             "internal": job.attributes.internal || false,
-            "questions-json": questionsJson
+            "questions-json": questionsJson,
+            "job-date": job.attributes['created-at'] || job.attributes['updated-at'] || ""
         };
 
         if (job.attributes.picture && job.attributes.picture.original) {
