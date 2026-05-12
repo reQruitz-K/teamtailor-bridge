@@ -312,16 +312,18 @@ export default {
                             const type = rawType ? rawType.toLowerCase() : 'text';
                             
                             // Handle Types
-                            if (type.includes('choice') || type.includes('select')) {       
+                            if (type === 'boolean') {
+                                attributes = { boolean: String(val).toLowerCase() === 'yes' };
+                            } else if (type.includes('choice') || type.includes('select')) {
                                  const alternatives = question.attributes.alternatives || [];
                                  const cleanVal = String(val).trim().toLowerCase();
                                  const match = alternatives.find(alt => alt.title.trim().toLowerCase() === cleanVal);
-                                 
+
                                  if (match) {
                                      attributes = { choices: [match.id] };
                                  } else {
                                      console.warn(`[Submit] Choice mismatch for Q ${questionId} ("${val}"). Fallback to text.`);
-                                     attributes = { text: String(val) }; 
+                                     attributes = { text: String(val) };
                                  }
                             } else if (type === 'range' || type === 'number') {
                                 const num = parseInt(val, 10);

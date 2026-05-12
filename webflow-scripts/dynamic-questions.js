@@ -37,11 +37,14 @@
             wrapper.appendChild(label);
             let inputContainer;
             // --- RENDER LOGIC ---
-            if (q.type === 'Choice' || q.type === 'select') {
+            if (q.type === 'Choice' || q.type === 'select' || q.type === 'Boolean') {
                 // RADIO BUTTONS (Pills)
                 inputContainer = document.createElement('div');
                 inputContainer.className = 'radio-group';
-                (q.options || []).forEach(opt => {
+                const options = (q.options && q.options.length > 0)
+                    ? q.options
+                    : [{ title: 'Yes' }, { title: 'No' }];
+                options.forEach(opt => {
                     const optLabel = document.createElement('label');
                     optLabel.className = 'radio-pill w-radio'; 
                     const radioInput = document.createElement('input');

@@ -1,0 +1,10 @@
+{
+  "name": "teamtailor-bridge",
+  "private": true,
+  "scripts": {
+    "dev": "http-server webflow-scripts -p 3000 --cors -c-1"
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}
