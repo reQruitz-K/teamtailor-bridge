@@ -194,11 +194,13 @@ export async function syncJob(jobId, env, jobData = null, resolvedLocationName =
             const newQuestions = fieldData['questions-json'] || "";
             const existingLocations = itemToUpdate.fieldData['locations'] || "";
             const newLocations = fieldData['locations'] || "";
+            const existingJobDate = itemToUpdate.fieldData['job-date'] || "";
 
             const primaryUpToDate = existingTimestamp === newTimestamp &&
                 existingInternal === newInternal &&
                 existingQuestions === newQuestions &&
                 existingLocations === newLocations &&
+                !!existingJobDate &&
                 !itemToUpdate.isArchived &&
                 itemToUpdate.isDraft === false;
 
