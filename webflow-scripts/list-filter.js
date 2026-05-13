@@ -2,11 +2,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const listItems = Array.from(document.querySelectorAll(".w-dyn-item"));
   const locationSelect = document.getElementById("locations");
   const remoteSelect = document.getElementById("remote");
-  const loadMoreBtn = document.querySelector("[data-load='true']") || document.querySelector("[data-load]"); // Handle various selector possibilities safely
 
-  // State
-  let visibleCount = 10;
-  const increment = 5;
 
   const getCleanData = (item) => {
     const rawLoc = item.querySelector("[data-location-label]")?.textContent || "";
@@ -115,41 +111,15 @@ document.addEventListener("DOMContentLoaded", () => {
       return matchLoc && matchRemote;
     });
 
-    // 3. Pagination Logic
-    itemData.forEach(item => item.element.style.display = "none"); // Hide all first
-    
-    const itemsToShow = finalFilteredItems.slice(0, visibleCount);
-    itemsToShow.forEach(item => item.element.style.display = "block");
-
-    // 4. Load More Button Visibility
-    if (loadMoreBtn) {
-      if (visibleCount >= finalFilteredItems.length) {
-        loadMoreBtn.style.display = "none";
-      } else {
-        loadMoreBtn.style.display = "block"; // Or "flex", depending on design. "block" is safer default.
-      }
-    }
+    // Show/hide items based on filter
+    itemData.forEach(item => item.element.style.display = "none");
+    finalFilteredItems.forEach(item => item.element.style.display = "block");
   };
 
   // Initial render (populates options based on full list)
   render();
 
   // Event Listeners
-  locationSelect.addEventListener("change", () => {
-    visibleCount = 10; // Reset pagination
-    render();
-  });
-
-  remoteSelect.addEventListener("change", () => {
-    visibleCount = 10; // Reset pagination
-    render();
-  });
-
-  if (loadMoreBtn) {
-    loadMoreBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      visibleCount += increment;
-      render();
-    });
-  }
+  locationSelect.addEventListener("change", render);
+  remoteSelect.addEventListener("change", render);
 });
