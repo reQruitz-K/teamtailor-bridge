@@ -5,7 +5,11 @@
  * 
  * Dependencies: jQuery (comes with Webflow)
  */
-document.addEventListener('DOMContentLoaded', function() {
+(function init() {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+        return;
+    }
     // 1. Identify the form.
     // Based on your screenshot, the Form Name is "openroles form".
     // Webflow usually adds data-name="openroles form" to the <form> tag.
@@ -89,4 +93,4 @@ document.addEventListener('DOMContentLoaded', function() {
             submitBtn.prop('disabled', false);
         }
     });
-});
+}());
