@@ -6,7 +6,7 @@ import { sleep, verifySignature } from './utils.js';
 const SECONDARY_LOCALE_IDS = ['665cb20748cb746631bffd66', '69b282e8dac0c1bbda31232c'];
 
 // Helper for batch reconciliation
-async function reconcileAllJobs(env) {
+async function reconcileAllJobs(env, forceCleanup = false) {
     const ttClient = new TeamTailorClient(env.TEAMTAILOR_API_KEY);
     const wfClient = new WebflowClient(env.WEBFLOW_API_TOKEN, env.WEBFLOW_COLLECTION_ID);
 
@@ -84,9 +84,12 @@ async function reconcileAllJobs(env) {
         }
     }
 
-    // Pass 2: Stage secondary locale content for all items (before batch publish)
-    console.log(`[Reconcile] Staging secondary locales for ${syncedItems.length} items...`);
-    for (const { itemId, fieldData } of syncedItems) {
+    // Pass 2: Stage secondary locale content for items that ACTUALLY changed
+    console.log(`[Reconcile] Staging secondary locales...`);
+    for (const { itemId, fieldData, wasUpdated } of syncedItems) {
+        if (!wasUpdated) {
+             continue; // Skip staging secondary locales if the primary didn't actually change
+        }
         await Promise.all(SECONDARY_LOCALE_IDS.map(async (localeId) => {
             try {
                 await wfClient.updateItemForLocale(itemId, localeId, fieldData);
@@ -98,14 +101,19 @@ async function reconcileAllJobs(env) {
     }
     console.log(`[Reconcile] Secondary locale staging complete.`);
 
-    // Pass 3: Batch publish all items — publishes all staged changes (primary + secondary locales)
+    // Pass 3: Batch publish all items for ALL locales explicitly
     if (syncedItems.length > 0) {
-        console.log(`[Reconcile] Batch publishing ${syncedItems.length} items...`);
-        try {
-            await wfClient.publishItem(syncedItems.map(i => i.itemId));
-            console.log(`[Reconcile] Batch publish complete.`);
-        } catch (err) {
-            console.error(`[Reconcile] Batch publish failed:`, err.message);
+        console.log(`[Reconcile] Batch publishing ${syncedItems.length} items across all locales...`);
+        const itemIds = syncedItems.map(i => i.itemId);
+        const allLocales = ['662123573a11a37d76a9f412', ...SECONDARY_LOCALE_IDS];
+        
+        for (const localeId of allLocales) {
+            try {
+                await wfClient.publishItem(itemIds, localeId);
+                console.log(`[Reconcile] Batch publish complete for locale ${localeId}.`);
+            } catch (err) {
+                console.error(`[Reconcile] Batch publish failed for locale ${localeId}:`, err.message);
+            }
         }
     }
 
@@ -121,8 +129,8 @@ async function reconcileAllJobs(env) {
         // Only cleanup items that HAVE a job-id (managed by us) AND are NOT in the valid list
         if (itemJobId && !validJobIds.has(String(itemJobId))) {
             
-            // Optimization: If already archived, skip
-            if (item.isArchived) {
+            // Optimization: If already archived, skip, unless forceCleanup is true
+            if (item.isArchived && !forceCleanup) {
                  continue;
             }
 
@@ -468,12 +476,13 @@ export default {
         // Manual Reconciliation Trigger (Protected)
         if (request.method === 'GET' && url.pathname === '/reconcile') {
             const key = url.searchParams.get('key');
+            const forceCleanup = url.searchParams.get('force-cleanup') === 'true';
             if (key !== env.TEAMTAILOR_API_KEY) {
                 return new Response("Unauthorized", { status: 401 });
             }
 
-            console.log("[Manual] Triggering full reconciliation via HTTP...");
-            await reconcileAllJobs(env);
+            console.log(`[Manual] Triggering full reconciliation via HTTP... (forceCleanup: ${forceCleanup})`);
+            await reconcileAllJobs(env, forceCleanup);
 
             return new Response("Full Reconciliation Complete", { status: 200 });
         }

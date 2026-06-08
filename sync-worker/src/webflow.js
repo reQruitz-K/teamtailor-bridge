@@ -83,14 +83,18 @@ export class WebflowClient {
         }
     }
 
-    async updateItem(itemId, fieldData, isArchived = false) {
+    async updateItem(itemId, fieldData, isArchived = false, isDraft = false) {
         const url = `${this.baseUrl}/collections/${this.collectionId}/items/${itemId}`;
         const headers = await this.getHeaders();
 
         const payload = {
             isArchived: !!isArchived,
-            fieldData: fieldData
+            isDraft: !!isDraft,
         };
+        
+        if (fieldData && Object.keys(fieldData).length > 0) {
+            payload.fieldData = fieldData;
+        }
 
         const response = await fetch(url, {
             method: 'PATCH',
@@ -106,15 +110,26 @@ export class WebflowClient {
         return await response.json();
     }
 
-    async updateItemForLocale(itemId, cmsLocaleId, fieldData) {
+    async updateItemForLocale(itemId, cmsLocaleId, fieldData, isArchived = false, isDraft = false) {
         // Individual item PATCH with cmsLocaleId in the body (not as a query param).
         // Per Webflow docs: "Items only update in the primary locale unless cmsLocaleId is in the body."
         const url = `${this.baseUrl}/collections/${this.collectionId}/items/${itemId}`;
         const headers = await this.getHeaders();
+        
+        const payload = { 
+            cmsLocaleId,
+            isArchived: !!isArchived,
+            isDraft: !!isDraft
+        };
+        
+        if (fieldData && Object.keys(fieldData).length > 0) {
+            payload.fieldData = fieldData;
+        }
+
         const response = await fetch(url, {
             method: 'PATCH',
             headers,
-            body: JSON.stringify({ cmsLocaleId, fieldData })
+            body: JSON.stringify(payload)
         });
         if (!response.ok) {
             const errorText = await response.text();
@@ -123,15 +138,23 @@ export class WebflowClient {
         return await response.json();
     }
 
-    async publishItem(itemIds) {
-        const url = `${this.baseUrl}/collections/${this.collectionId}/items/publish`;
+    async publishItem(itemIds, cmsLocaleId = null) {
+        let url = `${this.baseUrl}/collections/${this.collectionId}/items/publish`;
+        if (cmsLocaleId) {
+            url += `?cmsLocaleId=${cmsLocaleId}`;
+        }
+        
         const headers = await this.getHeaders();
         const ids = Array.isArray(itemIds) ? itemIds : [itemIds];
+
+        const payload = { 
+            itemIds: ids
+        };
 
         const response = await fetch(url, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ itemIds: ids })
+            body: JSON.stringify(payload)
         });
 
         if (!response.ok) {

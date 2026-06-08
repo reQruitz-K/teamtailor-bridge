@@ -169,7 +169,8 @@ export async function syncJob(jobId, env, jobData = null, resolvedLocationName =
             "updated-at": job.attributes['updated-at'] || "",
             "internal": job.attributes.internal || false,
             "questions-json": questionsJson,
-            "job-date": job.attributes['created-at'] || job.attributes['updated-at'] || ""
+            "job-date": job.attributes['created-at'] || job.attributes['updated-at'] || "",
+            "active": true
         };
 
         if (job.attributes.picture && job.attributes.picture.original) {
@@ -185,6 +186,8 @@ export async function syncJob(jobId, env, jobData = null, resolvedLocationName =
             itemToUpdate = await wfClient.findJobByTeamTailorId(job.id);
         }
 
+        let wasUpdated = false;
+
         if (itemToUpdate) {
             const existingTimestamp = itemToUpdate.fieldData['updated-at'];
             const newTimestamp = fieldData['updated-at'];
@@ -195,11 +198,13 @@ export async function syncJob(jobId, env, jobData = null, resolvedLocationName =
             const existingLocations = itemToUpdate.fieldData['locations'] || "";
             const newLocations = fieldData['locations'] || "";
             const existingJobDate = itemToUpdate.fieldData['job-date'] || "";
+            const existingActive = !!itemToUpdate.fieldData['active'];
 
             const primaryUpToDate = existingTimestamp === newTimestamp &&
                 existingInternal === newInternal &&
                 existingQuestions === newQuestions &&
                 existingLocations === newLocations &&
+                existingActive === true &&
                 !!existingJobDate &&
                 !itemToUpdate.isArchived &&
                 itemToUpdate.isDraft === false;
@@ -207,10 +212,12 @@ export async function syncJob(jobId, env, jobData = null, resolvedLocationName =
             if (primaryUpToDate) {
                 console.log(`[Sync] Primary up to date for Item ${itemToUpdate.id}, syncing secondary locales...`);
             } else {
+                wasUpdated = true;
                 console.log(`[Sync] Updating Webflow Item ${itemToUpdate.id}...`);
                 await wfClient.updateItem(itemToUpdate.id, fieldData);
             }
         } else {
+            wasUpdated = true;
             console.log(`[Sync] Creating new Webflow Item...`);
             try {
                 itemToUpdate = await wfClient.createItem(fieldData);
@@ -251,11 +258,18 @@ export async function syncJob(jobId, env, jobData = null, resolvedLocationName =
             }));
 
             console.log(`[Sync] Publishing Item ${itemToUpdate.id} (all locales)...`);
-            await wfClient.publishItem([itemToUpdate.id]);
+            const allLocales = ['662123573a11a37d76a9f412', ...SECONDARY_LOCALES.map(l => l.id)];
+            for (const localeId of allLocales) {
+                try {
+                    await wfClient.publishItem([itemToUpdate.id], localeId);
+                } catch (err) {
+                    console.error(`[Sync] Failed to publish locale ${localeId} for Item ${itemToUpdate.id}:`, err.message);
+                }
+            }
         }
 
         // Return itemId + fieldData so reconcile can do locale updates after batch publish
-        return { itemId: itemToUpdate.id, fieldData };
+        return { itemId: itemToUpdate.id, fieldData, wasUpdated };
 
     } catch (error) {
         console.error(`[Sync] Failed to sync Job ${jobId}:`, error);
@@ -271,15 +285,35 @@ export async function deleteJob(jobId, env) {
         const existingItem = await wfClient.findJobByTeamTailorId(jobId);
 
         if (existingItem) {
-            console.log(`[Delete] Found Webflow Item ${existingItem.id}. Archiving...`);
-            // We verify if we should delete or archive. Usually Archive is safer, but user asked for "remove".
-            // Webflow API v2 allows Archive via updating 'isArchived: true'.
-            // Let's Archive it for safety.
+            console.log(`[Delete] Found Webflow Item ${existingItem.id}. Archiving all locales...`);
             
-            await wfClient.updateItem(existingItem.id, {}, true); // Pass true for isArchived
-            console.log(`[Delete] Job archived successfully.`);
+            // Archive primary locale and set active to false
+            await wfClient.updateItem(existingItem.id, { "active": false }, true, false); 
+            
+            // Archive secondary locales and set active to false
+            for (const locale of SECONDARY_LOCALES) {
+                try {
+                    await wfClient.updateItemForLocale(existingItem.id, locale.id, { "active": false }, true, false);
+                } catch (err) {
+                    console.error(`[Delete] Failed to archive ${locale.tag} locale for Item ${existingItem.id}:`, err.message);
+                }
+            }
+            
+            // Publish the archived state so the item is removed from the live site
+            const allLocales = ['662123573a11a37d76a9f412', ...SECONDARY_LOCALES.map(l => l.id)];
+            for (const localeId of allLocales) {
+                try {
+                    await wfClient.publishItem([existingItem.id], localeId);
+                } catch (err) {
+                    console.error(`[Delete] Failed to publish archived locale ${localeId} for Item ${existingItem.id}:`, err.message);
+                }
+            }
+            
+            console.log(`[Delete] Job archived and published (removed from live site) for all locales.`);
+            return existingItem.id; // Return the item ID for batch tracking
         } else {
             console.log(`[Delete] Job ${jobId} not found in Webflow. Nothing to do.`);
+            return null;
         }
     } catch (error) {
         console.error(`[Delete] Failed to delete Job ${jobId}:`, error);
